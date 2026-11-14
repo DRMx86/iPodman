@@ -25,3 +25,4 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.ipodmanager
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

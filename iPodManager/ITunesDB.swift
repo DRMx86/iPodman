@@ -1,7 +1,7 @@
 import Foundation
 
 enum DBError: LocalizedError {
-    case notFound, corrupt(String), unsupportedFormat(String), unsupportedChecksum(Int)
+    case notFound, corrupt(String), unsupportedFormat(String), unsupportedChecksum(Int), readOnly
 
     var errorDescription: String? {
         switch self {
@@ -11,6 +11,8 @@ enum DBError: LocalizedError {
             return "The iPod database could not be read (\(s))."
         case .unsupportedFormat(let e):
             return "“.\(e)” isn’t supported by the iPod. Use MP3, M4A (AAC/ALAC), WAV or AIFF."
+        case .readOnly:
+            return "This iPod (nano 5th gen or newer) uses a compressed, signed database (iTunesCDB). It is opened read-only: you can browse and preview songs, not change them."
         case .unsupportedChecksum(let s):
             return "This iPod signs its database (scheme \(s)) and no checksum signer is installed, so nothing was changed. See the README."
         }
@@ -171,11 +173,31 @@ enum AudioFormat {
 final class ITunesDatabase {
     let root: DBNode
 
+    private(set) var readOnly = false
+
     init(bytes: Bytes) throws {
         guard bytes.count > 24, String(decoding: bytes[0..<4], as: UTF8.self) == "mhbd" else {
-            throw DBError.corrupt("not an iTunesDB")
+            throw DBError.corrupt("not an iTunesDB, \(bytes.count) bytes")
         }
-        root = try DBNode.parse(bytes, at: 0).0
+        let hsize = bytes.le32(4)
+        if hsize >= 12, bytes.count > hsize + 6, bytes[hsize] == 0x78 {
+            // iTunesCDB: mhbd header followed by one zlib stream of the mhsd chunks
+            let stream = Data(bytes[(hsize + 2)..<(bytes.count - 4)])   // skip zlib header + adler32
+            guard let raw = try? (stream as NSData).decompressed(using: .zlib) else {
+                throw DBError.corrupt("cannot decompress iTunesCDB")
+            }
+            let dec = Bytes(raw as Data)
+            let node = DBNode(tag: "mhbd", header: Array(bytes[0..<hsize]))
+            var p = 0
+            while p < dec.count {
+                let (c, e) = try DBNode.parse(dec, at: p)
+                node.children.append(c); p = e
+            }
+            root = node
+            readOnly = true
+        } else {
+            root = try DBNode.parse(bytes, at: 0).0
+        }
     }
 
     static var macNow: Int { Int(Date().timeIntervalSince1970) + 2_082_844_800 }
@@ -268,6 +290,7 @@ final class ITunesDatabase {
     }
 
     func serialized(allowUnsigned: Bool) throws -> Bytes {
+        guard !readOnly else { throw DBError.readOnly }
         var out = root.serialize()
         if hashingScheme != 0 {
             if let signer = Checksum.signer { try signer.sign(&out) }

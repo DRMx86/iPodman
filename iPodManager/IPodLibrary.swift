@@ -17,7 +17,13 @@ final class IPodLibrary: ObservableObject {
     private let fm = FileManager.default
     private let bookmarkKey = "ipodBookmark"
 
-    private var dbURL: URL? { root?.appendingPathComponent("iPod_Control/iTunes/iTunesDB") }
+    private var dbURL: URL? {
+        guard let root else { return nil }
+        let dir = root.appendingPathComponent("iPod_Control/iTunes")
+        let cdb = dir.appendingPathComponent("iTunesCDB")      // nano 5G+ keep the real library here
+        return fm.fileExists(atPath: cdb.path) ? cdb : dir.appendingPathComponent("iTunesDB")
+    }
+    var isReadOnly: Bool { db?.readOnly ?? false }
 
     init() {
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
@@ -37,6 +43,7 @@ final class IPodLibrary: ObservableObject {
             try reload()
             isConnected = true
             deviceName = url.lastPathComponent
+            if isReadOnly { errorMessage = DBError.readOnly.errorDescription }
             if let b = try? url.bookmarkData() { UserDefaults.standard.set(b, forKey: bookmarkKey) }
         } catch {
             if !silent { errorMessage = error.localizedDescription }

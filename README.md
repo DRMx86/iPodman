@@ -21,3 +21,6 @@ Edits only change the iPod database, not file tags. The album index is not rebui
 ## Build
 GitHub Actions (`.github/workflows/build.yml`) generates the project with XcodeGen and produces an **unsigned IPA** artifact;
 sideload it with AltStore / Sideloadly. Locally: `brew install xcodegen && xcodegen generate`.
+
+## nano 5G and newer
+These keep the library in a zlib-compressed `iTunesCDB` with a hash72 signature. The app reads it (browse + preview) but opens it read-only.

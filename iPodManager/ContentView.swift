@@ -55,7 +55,7 @@ struct ContentView: View {
                 lib.delete(t)
             }
         } message: { _ in Text("The file is removed from the iPod.") }
-        .alert("Error",
+        .alert("Notice",
                isPresented: Binding(get: { lib.errorMessage != nil }, set: { if !$0 { lib.errorMessage = nil } }),
                actions: { Button("OK", role: .cancel) {} },
                message: { Text(lib.errorMessage ?? "") })
@@ -89,8 +89,10 @@ struct ContentView: View {
                         else { lib.errorMessage = "Can’t find the audio file for this song." }
                     }
                     .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) { deleting = t } label: { Label("Delete", systemImage: "trash") }
-                        Button { editing = t } label: { Label("Edit", systemImage: "pencil") }.tint(.accentColor)
+                        if !lib.isReadOnly {
+                            Button(role: .destructive) { deleting = t } label: { Label("Delete", systemImage: "trash") }
+                            Button { editing = t } label: { Label("Edit", systemImage: "pencil") }.tint(.accentColor)
+                        }
                     }
             }
         }
@@ -114,7 +116,7 @@ struct ContentView: View {
             } label: { Image(systemName: "ellipsis.circle") }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Button { pick(.songs) } label: { Image(systemName: "plus") }
+            Button { pick(.songs) } label: { Image(systemName: "plus") }.disabled(lib.isReadOnly)
         }
     }
 
