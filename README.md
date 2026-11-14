@@ -24,3 +24,10 @@ sideload it with AltStore / Sideloadly. Locally: `brew install xcodegen && xcode
 
 ## nano 5G and newer
 These keep the library in a zlib-compressed `iTunesCDB` with a hash72 signature. The app reads it (browse + preview) but opens it read-only.
+
+## Album art & downloading
+- Thumbnails come from the cover art embedded in each audio file's tags (not from the iPod's ArtworkDB). Songs added by this app
+  don't get iPod-side artwork, so the iPod itself won't show it for them.
+- Swipe right on a song (or long-press, or *Select* for many) → **Save to Files** copies the songs out as "Artist - Title.ext".
+  Works for read-only iPods too.
+- HashAB (dstaley/hashab) is for nano 6G/7G only; it does not apply to nano 5G (hash72) or Classic (hash58).

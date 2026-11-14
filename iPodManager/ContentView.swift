@@ -3,6 +3,11 @@ import UniformTypeIdentifiers
 
 private enum ImportMode { case folder, songs }
 
+private struct ExportItem: Identifiable {
+    let id = UUID()
+    let urls: [URL]
+}
+
 struct ContentView: View {
     @StateObject private var lib = IPodLibrary()
     @StateObject private var preview = Preview()
@@ -11,6 +16,9 @@ struct ContentView: View {
     @State private var editing: Track?
     @State private var deleting: Track?
     @State private var search = ""
+    @State private var selecting = false
+    @State private var selected = Set<Int>()
+    @State private var exportItem: ExportItem?
 
     private var filtered: [Track] {
         guard !search.isEmpty else { return lib.tracks }
@@ -26,7 +34,12 @@ struct ContentView: View {
             }
             .navigationTitle(lib.isConnected ? lib.deviceName : "iPod Manager")
             .toolbar { if lib.isConnected { toolbarContent } }
-            .safeAreaInset(edge: .bottom) { if preview.current != nil { miniPlayer } }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    if selecting { selectionBar }
+                    if preview.current != nil { miniPlayer }
+                }
+            }
             .overlay { if lib.busy { busyOverlay } }
         }
         .fileImporter(
@@ -45,6 +58,9 @@ struct ContentView: View {
         .sheet(item: $editing) { t in
             EditSheet(track: t) { lib.update($0) }
         }
+        .sheet(item: $exportItem) { item in
+            ExportPicker(urls: item.urls) { lib.cleanupExport(item.urls) }.ignoresSafeArea()
+        }
         .confirmationDialog(
             "Delete from iPod?",
             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
@@ -62,6 +78,24 @@ struct ContentView: View {
     }
 
     private func pick(_ m: ImportMode) { importMode = m; showImporter = true }
+
+    private func download(_ tracks: [Track]) {
+        Task {
+            let urls = await lib.prepareExport(tracks)
+            selecting = false; selected = []
+            if !urls.isEmpty { exportItem = ExportItem(urls: urls) }
+        }
+    }
+
+    private func tap(_ t: Track) {
+        if selecting {
+            if selected.contains(t.id) { selected.remove(t.id) } else { selected.insert(t.id) }
+        } else if let u = lib.url(for: t) {
+            preview.toggle(t, url: u)
+        } else {
+            lib.errorMessage = "Can’t find the audio file for this song."
+        }
+    }
 
     // MARK: Pieces
 
@@ -82,16 +116,28 @@ struct ContentView: View {
     private var songList: some View {
         List {
             ForEach(filtered) { t in
-                TrackRow(track: t, isCurrent: preview.current?.id == t.id, isPlaying: preview.isPlaying)
+                TrackRow(track: t, url: lib.url(for: t),
+                         isCurrent: preview.current?.id == t.id, isPlaying: preview.isPlaying,
+                         selecting: selecting, isSelected: selected.contains(t.id))
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        if let u = lib.url(for: t) { preview.toggle(t, url: u) }
-                        else { lib.errorMessage = "Can’t find the audio file for this song." }
+                    .onTapGesture { tap(t) }
+                    .swipeActions(edge: .leading) {
+                        if !selecting {
+                            Button { download([t]) } label: { Label("Save", systemImage: "square.and.arrow.down") }
+                                .tint(.green)
+                        }
                     }
                     .swipeActions(edge: .trailing) {
-                        if !lib.isReadOnly {
+                        if !selecting && !lib.isReadOnly {
                             Button(role: .destructive) { deleting = t } label: { Label("Delete", systemImage: "trash") }
                             Button { editing = t } label: { Label("Edit", systemImage: "pencil") }.tint(.accentColor)
+                        }
+                    }
+                    .contextMenu {
+                        Button { download([t]) } label: { Label("Save to Files", systemImage: "square.and.arrow.down") }
+                        if !lib.isReadOnly {
+                            Button { editing = t } label: { Label("Edit", systemImage: "pencil") }
+                            Button(role: .destructive) { deleting = t } label: { Label("Delete", systemImage: "trash") }
                         }
                     }
             }
@@ -99,9 +145,7 @@ struct ContentView: View {
         .listStyle(.plain)
         .searchable(text: $search, prompt: "Search songs")
         .overlay {
-            if lib.tracks.isEmpty {
-                Text("No songs on this iPod").foregroundStyle(.secondary)
-            }
+            if lib.tracks.isEmpty { Text("No songs on this iPod").foregroundStyle(.secondary) }
         }
         .refreshable { try? lib.reload() }
     }
@@ -112,17 +156,43 @@ struct ContentView: View {
             Menu {
                 Toggle("Write without checksum (experimental)", isOn: $lib.allowUnsigned)
                 Button("Reload") { try? lib.reload() }
-                Button("Disconnect", role: .destructive) { preview.stop(); lib.disconnect() }
+                Button("Disconnect", role: .destructive) {
+                    preview.stop(); selecting = false; selected = []; lib.disconnect()
+                }
             } label: { Image(systemName: "ellipsis.circle") }
         }
         ToolbarItem(placement: .topBarTrailing) {
-            Button { pick(.songs) } label: { Image(systemName: "plus") }.disabled(lib.isReadOnly)
+            Button(selecting ? "Done" : "Select") { selecting.toggle(); selected = [] }
         }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { pick(.songs) } label: { Image(systemName: "plus") }.disabled(lib.isReadOnly || selecting)
+        }
+    }
+
+    private var selectionBar: some View {
+        HStack {
+            Button(selected.count == filtered.count ? "Select None" : "Select All") {
+                selected = selected.count == filtered.count ? [] : Set(filtered.map(\.id))
+            }
+            Spacer()
+            Button {
+                download(lib.tracks.filter { selected.contains($0.id) })
+            } label: {
+                Label("Save to Files (\(selected.count))", systemImage: "square.and.arrow.down")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(selected.isEmpty)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.regularMaterial)
     }
 
     private var miniPlayer: some View {
         VStack(spacing: 4) {
-            HStack {
+            HStack(spacing: 12) {
+                if let cur = preview.current {
+                    ArtworkView(track: cur, url: lib.url(for: cur), side: 40)
+                }
                 VStack(alignment: .leading) {
                     Text(preview.current?.title ?? "").font(.subheadline.weight(.semibold)).lineLimit(1)
                     Text(preview.current?.artist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -150,16 +220,20 @@ struct ContentView: View {
 
 struct TrackRow: View {
     let track: Track
+    let url: URL?
     let isCurrent: Bool
     let isPlaying: Bool
+    let selecting: Bool
+    let isSelected: Bool
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(.quaternary).frame(width: 44, height: 44)
-                Image(systemName: isCurrent && isPlaying ? "waveform" : "music.note")
-                    .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
+            if selecting {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .font(.title3)
             }
+            ArtworkView(track: track, url: url, isCurrent: isCurrent, isPlaying: isPlaying)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title.isEmpty ? "Untitled" : track.title).lineLimit(1)
                 Text([track.artist, track.album].filter { !$0.isEmpty }.joined(separator: " — "))
@@ -174,6 +248,27 @@ struct TrackRow: View {
     private var duration: String {
         let s = track.durationMs / 1000
         return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+struct ExportPicker: UIViewControllerRepresentable {
+    let urls: [URL]
+    let onFinish: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onFinish) }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let p = UIDocumentPickerViewController(forExporting: urls, asCopy: true)
+        p.delegate = context.coordinator
+        return p
+    }
+    func updateUIViewController(_ vc: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onFinish: () -> Void
+        init(_ f: @escaping () -> Void) { onFinish = f }
+        func documentPicker(_ c: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { onFinish() }
+        func documentPickerWasCancelled(_ c: UIDocumentPickerViewController) { onFinish() }
     }
 }
 

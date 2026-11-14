@@ -37,6 +37,7 @@ final class IPodLibrary: ObservableObject {
 
     func connect(_ url: URL, silent: Bool = false) {
         release()
+        ArtworkCache.shared.reset()
         scoped = url.startAccessingSecurityScopedResource()
         root = url
         do {
@@ -140,6 +141,49 @@ final class IPodLibrary: ObservableObject {
             if let file { try? fm.removeItem(at: file) }
             refresh()
         } catch { errorMessage = error.localizedDescription; try? reload() }
+    }
+
+    // MARK: Export (iPod -> Files)
+
+    /// Copies songs out of the iPod into a temp folder, named "Artist - Title.ext".
+    func prepareExport(_ items: [Track]) async -> [URL] {
+        let pairs: [(URL, String)] = items.compactMap { t in
+            guard let u = url(for: t) else { return nil }
+            let base = [t.artist, t.title].filter { !$0.isEmpty }.joined(separator: " - ")
+            return (u, base.isEmpty ? u.deletingPathExtension().lastPathComponent : base)
+        }
+        busy = true
+        defer { busy = false }
+        let (urls, failed) = await Task.detached { Self.copyOut(pairs) }.value
+        if !failed.isEmpty { errorMessage = "Couldn’t copy: " + failed.joined(separator: ", ") }
+        return urls
+    }
+
+    func cleanupExport(_ urls: [URL]) {
+        if let dir = urls.first?.deletingLastPathComponent(), dir.lastPathComponent.hasPrefix("export-") {
+            try? fm.removeItem(at: dir)
+        }
+    }
+
+    nonisolated static func copyOut(_ pairs: [(URL, String)]) -> ([URL], [String]) {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("export-\(UUID().uuidString)")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let bad = CharacterSet(charactersIn: "/\\:?*\"<>|")
+        var out: [URL] = [], failed: [String] = []
+        for (src, base) in pairs {
+            var name = String(base.components(separatedBy: bad).joined(separator: "_")
+                .trimmingCharacters(in: .whitespaces).prefix(120))
+            if name.isEmpty { name = "Track" }
+            let ext = src.pathExtension
+            var dest = dir.appendingPathComponent(name).appendingPathExtension(ext)
+            var n = 2
+            while fm.fileExists(atPath: dest.path) {
+                dest = dir.appendingPathComponent("\(name) \(n)").appendingPathExtension(ext); n += 1
+            }
+            do { try fm.copyItem(at: src, to: dest); out.append(dest) } catch { failed.append(src.lastPathComponent) }
+        }
+        return (out, failed)
     }
 
     private func newDestination(root: URL, ext: String) throws -> (URL, String) {
