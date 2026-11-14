@@ -1,7 +1,7 @@
 import Foundation
 
 enum DBError: LocalizedError {
-    case notFound, corrupt(String), unsupportedFormat(String), unsupportedChecksum(Int), readOnly
+    case notFound, corrupt(String), unsupportedFormat(String), unsupportedChecksum(Int), readOnly, disconnected
 
     var errorDescription: String? {
         switch self {
@@ -11,6 +11,8 @@ enum DBError: LocalizedError {
             return "The iPod database could not be read (\(s))."
         case .unsupportedFormat(let e):
             return "“.\(e)” isn’t supported by the iPod. Use MP3, M4A (AAC/ALAC), WAV or AIFF."
+        case .disconnected:
+            return "The iPod was disconnected. Nothing was written. Plug it in and tap Insert iPod."
         case .readOnly:
             return "This iPod (nano 5th gen or newer) uses a compressed, signed database (iTunesCDB). It is opened read-only: you can browse and preview songs, not change them."
         case .unsupportedChecksum(let s):

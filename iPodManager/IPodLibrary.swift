@@ -24,6 +24,7 @@ final class IPodLibrary: ObservableObject {
         return fm.fileExists(atPath: cdb.path) ? cdb : dir.appendingPathComponent("iTunesDB")
     }
     var isReadOnly: Bool { db?.readOnly ?? false }
+    var hasSavedDevice: Bool { UserDefaults.standard.data(forKey: bookmarkKey) != nil }
 
     init() {
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
@@ -43,7 +44,7 @@ final class IPodLibrary: ObservableObject {
         do {
             try reload()
             isConnected = true
-            deviceName = url.lastPathComponent
+            deviceName = Self.friendlyName(url)
             if isReadOnly { errorMessage = DBError.readOnly.errorDescription }
             if let b = try? url.bookmarkData() { UserDefaults.standard.set(b, forKey: bookmarkKey) }
         } catch {
@@ -52,6 +53,34 @@ final class IPodLibrary: ObservableObject {
         }
     }
 
+    /// iOS has no unmount API: "eject" flushes, stops all access and releases the volume so it can be unplugged.
+    func eject() {
+        guard !busy else { return }
+        release()
+        errorMessage = "iPod ejected. It’s safe to unplug it now. (iOS can’t unmount drives itself, so you can also tap the eject icon next to the drive in the Files app.)"
+    }
+
+    /// Re-open the iPod that was used last.
+    func insert() {
+        guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
+            errorMessage = "Couldn’t reach the iPod. Plug it in, enable disk mode, then choose it again."
+            return
+        }
+        connect(url)
+    }
+
+    nonisolated static func friendlyName(_ url: URL) -> String {
+        let n = (try? url.resourceValues(forKeys: [.volumeNameKey]))?.volumeName ?? url.lastPathComponent
+        return (n.count >= 32 && n.filter { $0 == "-" }.count >= 3) ? "iPod" : n
+    }
+
+    private func flush(_ url: URL) {
+        if let h = try? FileHandle(forUpdating: url) { try? h.synchronize(); try? h.close() }
+    }
+
+    /// Forget the remembered iPod.
     func disconnect() {
         release()
         UserDefaults.standard.removeObject(forKey: bookmarkKey)
@@ -84,10 +113,12 @@ final class IPodLibrary: ObservableObject {
 
     private func save() throws {
         guard let db, let url = dbURL else { return }
+        guard fm.fileExists(atPath: url.path) else { release(); throw DBError.disconnected }
         let out = try db.serialized(allowUnsigned: allowUnsigned)
         let backup = url.appendingPathExtension("bak")      // original kept once
         if !fm.fileExists(atPath: backup.path) { try? fm.copyItem(at: url, to: backup) }
         try Data(out).write(to: url)
+        flush(url)
     }
 
     // MARK: Operations
@@ -109,6 +140,7 @@ final class IPodLibrary: ObservableObject {
                 let meta = await MetadataReader.read(url)
                 let (dest, loc) = try newDestination(root: root, ext: url.pathExtension.lowercased())
                 try fm.copyItem(at: url, to: dest)
+                flush(dest)
                 copied.append(dest)
                 let size = (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int) ?? 0
                 db.addTrack(meta, format: format, size: size, location: loc)

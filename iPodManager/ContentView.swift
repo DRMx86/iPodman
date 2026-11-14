@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var selecting = false
     @State private var selected = Set<Int>()
     @State private var exportItem: ExportItem?
+    @State private var showPlayer = false
 
     private var filtered: [Track] {
         guard !search.isEmpty else { return lib.tracks }
@@ -58,6 +59,9 @@ struct ContentView: View {
         .sheet(item: $editing) { t in
             EditSheet(track: t) { lib.update($0) }
         }
+        .sheet(isPresented: $showPlayer) {
+            NowPlayingView(preview: preview, url: { lib.url(for: $0) })
+        }
         .sheet(item: $exportItem) { item in
             ExportPicker(urls: item.urls) { lib.cleanupExport(item.urls) }.ignoresSafeArea()
         }
@@ -90,8 +94,8 @@ struct ContentView: View {
     private func tap(_ t: Track) {
         if selecting {
             if selected.contains(t.id) { selected.remove(t.id) } else { selected.insert(t.id) }
-        } else if let u = lib.url(for: t) {
-            preview.toggle(t, url: u)
+        } else if lib.url(for: t) != nil {
+            preview.play(t, in: filtered, urlFor: { lib.url(for: $0) })
         } else {
             lib.errorMessage = "Can’t find the audio file for this song."
         }
@@ -102,13 +106,23 @@ struct ContentView: View {
     private var emptyState: some View {
         VStack(spacing: 20) {
             Image(systemName: "ipod").font(.system(size: 64, weight: .thin)).foregroundStyle(.secondary)
-            Text("Connect your iPod").font(.title2.weight(.semibold))
-            Text("Put the iPod in disk mode, plug it in, then choose its root folder in Files.")
+            Text(lib.hasSavedDevice ? "iPod ejected" : "Connect your iPod").font(.title2.weight(.semibold))
+            Text(lib.hasSavedDevice
+                 ? "Plug the iPod back in (disk mode), then tap Insert."
+                 : "Put the iPod in disk mode, plug it in, then choose its root folder in Files.")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button { pick(.folder) } label: {
-                Label("Choose iPod", systemImage: "externaldrive").frame(maxWidth: 220)
+            if lib.hasSavedDevice {
+                Button { lib.insert() } label: {
+                    Label("Insert iPod", systemImage: "arrow.down.to.line").frame(maxWidth: 220)
+                }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                Button("Choose a different folder") { pick(.folder) }
+            } else {
+                Button { pick(.folder) } label: {
+                    Label("Choose iPod", systemImage: "externaldrive").frame(maxWidth: 220)
+                }
+                .buttonStyle(.borderedProminent).controlSize(.large)
             }
-            .buttonStyle(.borderedProminent).controlSize(.large)
         }
         .padding(32)
     }
@@ -156,10 +170,16 @@ struct ContentView: View {
             Menu {
                 Toggle("Write without checksum (experimental)", isOn: $lib.allowUnsigned)
                 Button("Reload") { try? lib.reload() }
-                Button("Disconnect", role: .destructive) {
+                Button("Forget iPod", role: .destructive) {
                     preview.stop(); selecting = false; selected = []; lib.disconnect()
                 }
             } label: { Image(systemName: "ellipsis.circle") }
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            Button {
+                preview.stop(); selecting = false; selected = []; lib.eject()
+            } label: { Image(systemName: "eject.fill") }
+            .disabled(lib.busy)
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button(selecting ? "Done" : "Select") { selecting.toggle(); selected = [] }
@@ -188,27 +208,38 @@ struct ContentView: View {
     }
 
     private var miniPlayer: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 0) {
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(.quaternary)
+                    Rectangle().fill(Color.accentColor)
+                        .frame(width: g.size.width * min(preview.position / max(preview.duration, 1), 1))
+                }
+            }
+            .frame(height: 2)
             HStack(spacing: 12) {
                 if let cur = preview.current {
-                    ArtworkView(track: cur, url: lib.url(for: cur), side: 40)
+                    ArtworkView(track: cur, url: lib.url(for: cur), side: 44)
                 }
-                VStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(preview.current?.title ?? "").font(.subheadline.weight(.semibold)).lineLimit(1)
                     Text(preview.current?.artist ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
-                Button { if let t = preview.current, let u = lib.url(for: t) { preview.toggle(t, url: u) } } label: {
-                    Image(systemName: preview.isPlaying ? "pause.fill" : "play.fill").font(.title3)
+                Button { preview.togglePlayPause() } label: {
+                    Image(systemName: preview.isPlaying ? "pause.fill" : "play.fill").font(.title2).frame(width: 36, height: 36)
                 }
-                Button { preview.stop() } label: { Image(systemName: "xmark").font(.callout) }
-                    .foregroundStyle(.secondary).padding(.leading, 8)
+                Button { preview.next() } label: {
+                    Image(systemName: "forward.fill").font(.title3).frame(width: 36, height: 36)
+                }
+                .disabled(!preview.hasNext)
             }
-            Slider(value: Binding(get: { preview.position }, set: { preview.seek($0) }),
-                   in: 0...max(preview.duration, 1))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16).padding(.vertical, 8)
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.regularMaterial)
+        .contentShape(Rectangle())
+        .onTapGesture { showPlayer = true }
     }
 
     private var busyOverlay: some View {

@@ -3,7 +3,7 @@ import UIKit
 import AVFoundation
 import ImageIO
 
-/// Reads cover art embedded in the audio file's own tags (ID3 / MP4) and caches small thumbnails.
+/// Reads cover art embedded in the audio file's own tags (ID3 / MP4) and caches thumbnails.
 @MainActor
 final class ArtworkCache {
     static let shared = ArtworkCache()
@@ -12,12 +12,13 @@ final class ArtworkCache {
 
     func reset() { cache.removeAllObjects(); missing.removeAll() }
 
-    func image(key: String, url: URL) async -> UIImage? {
-        if let i = cache.object(forKey: key as NSString) { return i }
+    func image(key: String, url: URL, pixels: CGFloat = 160) async -> UIImage? {
+        let k = "\(key)@\(Int(pixels))"
+        if let i = cache.object(forKey: k as NSString) { return i }
         if missing.contains(key) { return nil }
         guard let data = await Self.loadData(url) else { missing.insert(key); return nil }
-        let img = await Task.detached { Self.thumbnail(data, 160) }.value
-        if let img { cache.setObject(img, forKey: key as NSString) } else { missing.insert(key) }
+        let img = await Task.detached { Self.thumbnail(data, pixels) }.value
+        if let img { cache.setObject(img, forKey: k as NSString) } else { missing.insert(key) }
         return img
     }
 
@@ -48,25 +49,29 @@ struct ArtworkView: View {
     var isCurrent = false
     var isPlaying = false
     var side: CGFloat = 44
+    var pixels: CGFloat = 160
+    var corner: CGFloat = 8
     @State private var image: UIImage?
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 8).fill(.quaternary)
+            RoundedRectangle(cornerRadius: corner).fill(.quaternary)
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                Image(systemName: "music.note").foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
+                Image(systemName: "music.note")
+                    .font(.system(size: side * 0.38))
+                    .foregroundStyle(isCurrent ? Color.accentColor : Color.secondary)
             }
             if isCurrent && isPlaying {
                 ZStack { Color.black.opacity(0.4); Image(systemName: "waveform").foregroundStyle(.white) }
             }
         }
         .frame(width: side, height: side)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: corner))
         .task(id: track.location) {
             guard let url else { return }
-            image = await ArtworkCache.shared.image(key: track.location, url: url)
+            image = await ArtworkCache.shared.image(key: track.location, url: url, pixels: pixels)
         }
     }
 }
